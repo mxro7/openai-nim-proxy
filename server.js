@@ -11,8 +11,8 @@ app.use(express.json());
 const NIM_API_BASE = 'https://integrate.api.nvidia.com/v1';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-const SHOW_REASONING = false;
-const ENABLE_THINKING_MODE = false;
+const SHOW_REASONING = true;
+const ENABLE_THINKING_MODE = true;
 
 const MODEL_MAPPING = {
   'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
@@ -47,9 +47,9 @@ app.post('/v1/chat/completions', async (req, res) => {
     const nimRequest = {
       model: nimModel,
       messages,
-      temperature: temperature || 0.6,
-      max_tokens: max_tokens || 9024,
-      stream: stream || false,
+      temperature: temperature || 0.9,
+      max_tokens: max_tokens || 32000,
+      stream: stream || true,
       ...(ENABLE_THINKING_MODE && { extra_body: { chat_template_kwargs: { thinking: true } } })
     };
 
