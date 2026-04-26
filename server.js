@@ -40,8 +40,9 @@ app.get('/v1/models', (req, res) => {
 
 app.post('/v1/chat/completions', async (req, res) => {
   try {
-    const { model, messages, temperature, max_tokens, stream } = req.body;
+    const { model, messages, temperature, max_tokens } = req.body;
 
+    const shouldStream = true;
     let nimModel = MODEL_MAPPING[model] || model;
 
     const nimRequest = {
@@ -49,8 +50,8 @@ app.post('/v1/chat/completions', async (req, res) => {
       messages,
       temperature: temperature || 0.9,
       max_tokens: max_tokens || 32000,
-      stream: stream || true,
-      ...(ENABLE_THINKING_MODE && { extra_body: { chat_template_kwargs: { thinking: true } } })
+      stream: shouldStream,
+      ...(ENABLE_THINKING_MODE && { chat_template_kwargs: { thinking: true } })
     };
 
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
@@ -58,69 +59,50 @@ app.post('/v1/chat/completions', async (req, res) => {
         'Authorization': `Bearer ${NIM_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      responseType: stream ? 'stream' : 'json'
+      responseType: 'stream'
     });
 
-    if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
 
-      let buffer = '';
-      let reasoningStarted = false;
+    let buffer = '';
+    let reasoningStarted = false;
 
-      response.data.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+    response.data.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
 
-        lines.forEach(line => {
-          if (!line.startsWith('data: ')) return;
-          if (line.includes('[DONE]')) { res.write(line + '\n'); return; }
+      lines.forEach(line => {
+        if (!line.startsWith('data: ')) return;
+        if (line.includes('[DONE]')) { res.write(line + '\n'); return; }
 
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.choices?.[0]?.delta) {
-              const reasoning = data.choices[0].delta.reasoning_content;
-              const content = data.choices[0].delta.content;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.choices?.[0]?.delta) {
+            const reasoning = data.choices[0].delta.reasoning_content;
+            const content = data.choices[0].delta.content;
 
-              if (SHOW_REASONING) {
-                let combined = '';
-                if (reasoning && !reasoningStarted) { combined = '<think>\n' + reasoning; reasoningStarted = true; }
-                else if (reasoning) { combined = reasoning; }
-                if (content && reasoningStarted) { combined += '</think>\n\n' + content; reasoningStarted = false; }
-                else if (content) { combined += content; }
-                if (combined) data.choices[0].delta.content = combined;
-              } else {
-                data.choices[0].delta.content = content || '';
-              }
-              delete data.choices[0].delta.reasoning_content;
+            if (SHOW_REASONING) {
+              let combined = '';
+              if (reasoning && !reasoningStarted) { combined = '<think>\n' + reasoning; reasoningStarted = true; }
+              else if (reasoning) { combined = reasoning; }
+              if (content && reasoningStarted) { combined += '</think>\n\n' + content; reasoningStarted = false; }
+              else if (content) { combined += content; }
+              if (combined) data.choices[0].delta.content = combined;
+            } else {
+              data.choices[0].delta.content = content || '';
             }
-            res.write(`data: ${JSON.stringify(data)}\n\n`);
-          } catch (e) { res.write(line + '\n'); }
-        });
-      });
-
-      response.data.on('end', () => res.end());
-      response.data.on('error', () => res.end());
-
-    } else {
-      const openaiResponse = {
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: response.data.choices.map(choice => {
-          let content = choice.message?.content || '';
-          if (SHOW_REASONING && choice.message?.reasoning_content) {
-            content = '<think>\n' + choice.message.reasoning_content + '\n</think>\n\n' + content;
+            delete data.choices[0].delta.reasoning_content;
           }
-          return { index: choice.index, message: { role: choice.message.role, content }, finish_reason: choice.finish_reason };
-        }),
-        usage: response.data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-      };
-      res.json(openaiResponse);
-    }
+          res.write(`data: ${JSON.stringify(data)}\n\n`);
+        } catch (e) { res.write(line + '\n'); }
+      });
+    });
+
+    response.data.on('end', () => res.end());
+    response.data.on('error', () => res.end());
 
   } catch (error) {
     res.status(error.response?.status || 500).json({
